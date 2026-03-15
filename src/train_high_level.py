@@ -12,24 +12,26 @@ from replay_buffer import ReplayBuffer
 from networks import DQN_MLP
 from utils import select_action, compute_loss, update_target_network, update_epsilon
 
+# with this config we can run multiple experiments as instructed
+RUN_NAME = "run3"  # "baseline", "run2", "run3"
+
 # Output directory for plots (docs/images for GitHub Pages submission)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLOT_DIR = os.path.join(SCRIPT_DIR, "..", "docs", "images")
 os.makedirs(PLOT_DIR, exist_ok=True)
 
-#  HYPERPARAMETERS 
+#  CHANGED HYPERPARAMETERS FROM  AS INSTRUCTOD
 N_ACTIONS = 8
 GAMMA = 0.99
-EPSILON = 1.0
-EPSILON_DECAY = 0.999 
-EPSILON_DECAY_ITER = 10 
-MIN_EPSILON = 0.1 
+EPS_START = 0.9
+EPS_END = 0.05
+EPS_DECAY = 10000
 LEARNING_RATE = 0.0001
-BATCH_SIZE = 32
+BATCH_SIZE = 256
+TAU = 0.005
 UPDATE_FREQ = 4 
-TARGET_NETWORK_UPDATE_FREQ = 100 
 BUFFER_LENGTH = 10000
-EPISODES = 500
+EPISODES = 2500
 
 
 # CUDA if avaible else CPU
@@ -39,7 +41,7 @@ print(f"Using device: {device}")
 
 
 #  SETUP 
-env = Hw2Env(n_actions=N_ACTIONS, render_mode="gui")
+env = Hw2Env(n_actions=N_ACTIONS, render_mode="offscreen")
 
 #  reseting the env and extract it to see how big it is.
 env.reset()
@@ -56,11 +58,12 @@ target_network = DQN_MLP(state_dim, N_ACTIONS).to(device)
 # Synchronizeing the target network for step 0 so they start identical.
 
 
-update_target_network(main_network, target_network)
+target_network.load_state_dict(main_network.state_dict())
 
-optimizer = optim.Adam(main_network.parameters(), lr=LEARNING_RATE) #adam optimizer as always
+optimizer = optim.Adam(main_network.parameters(), lr=LEARNING_RATE) #Adam optimizer as always
 
 global_step = 0
+EPSILON = EPS_START
 
 # History lists for plotting
 reward_history = []
@@ -86,7 +89,7 @@ for episode in range(EPISODES):
 
         # TRAINING  
 
-        # We only train if we have enough data in the buffer AND it is time to update
+        #  only train if have enough data in the buffer AND it is time to update
         if replay_buffer.size >= BATCH_SIZE and global_step % UPDATE_FREQ == 0:
             batch = replay_buffer.sample(BATCH_SIZE)
          
@@ -96,14 +99,13 @@ for episode in range(EPISODES):
             loss.backward() #compute new gradients
             optimizer.step() #update the weights
             
-        # EPSILON DECAY 
-        if global_step % EPSILON_DECAY_ITER == 0:
-    
-            EPSILON = update_epsilon(EPSILON, MIN_EPSILON, EPSILON_DECAY)
+     #happens every time the main network updates
+            update_target_network(main_network, target_network, TAU)
             
-        #  TARGET NETWORK SYNC 
-        if global_step % TARGET_NETWORK_UPDATE_FREQ == 0:
-            update_target_network(main_network, target_network)
+        # EPSILON DECAY: Now calculated continuously based on global_step
+        EPSILON = update_epsilon(global_step, EPS_START, EPS_END, EPS_DECAY)
+            
+
         # next state
         state = next_state
         cumulative_reward += reward
@@ -118,15 +120,18 @@ for episode in range(EPISODES):
     reward_history.append(cumulative_reward)
     rps_history.append(rps)
     
-    # Printing metrics at the end of every episode
-    print(f"Episode: {episode}, Steps: {episode_steps}, Reward: {cumulative_reward:.2f}, RPS: {rps:.2f}, Epsilon: {EPSILON:.3f}")
+    
+    if episode % 10 == 0 or episode == EPISODES - 1:
+        print(f"Episode: {episode}, Steps: {episode_steps}, Reward: {cumulative_reward:.2f}, RPS: {rps:.2f}, Epsilon: {EPSILON:.3f}")
+
 
 
 print("Training Completed, saving model and generating plots....")
 
 # Save the trained model weights
-torch.save(main_network.state_dict(), "dqn_high_level_model.pth")
-print("Model saved to 'dqn_high_level_model.pth'")
+model_path = f"dqn_high_level_{RUN_NAME}.pth"
+torch.save(main_network.state_dict(), model_path)
+print(f"Model saved to '{model_path}'")
 
 # Plot 1 Total Reward per Episode
 plt.figure(figsize=(10, 5))
@@ -135,7 +140,7 @@ plt.xlabel("Episode")
 plt.ylabel("Reward")
 plt.title("DQN Training: Total Cumulative Reward per Episode")
 plt.legend()
-reward_plot_path = os.path.join(PLOT_DIR, "hw2_reward_plot.png")
+reward_plot_path = os.path.join(PLOT_DIR, f"{RUN_NAME}_reward.png")
 plt.savefig(reward_plot_path)
 plt.close()
 print(f"Reward plot saved to '{reward_plot_path}'")
@@ -147,7 +152,7 @@ plt.xlabel("Episode")
 plt.ylabel("RPS")
 plt.title("DQN Training: Reward Per Step over Episodes")
 plt.legend()
-rps_plot_path = os.path.join(PLOT_DIR, "hw2_rps_plot.png")
+rps_plot_path = os.path.join(PLOT_DIR, f"{RUN_NAME}_rps.png")
 plt.savefig(rps_plot_path)
 plt.close()
 print(f"RPS plot saved to '{rps_plot_path}'")
